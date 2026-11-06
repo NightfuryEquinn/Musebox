@@ -1,0 +1,4 @@
+export const WAVE_WIDTH=10, WAVE_HEIGHT=4, MAX_DISPLACEMENT=1.65;
+export const WAVE_COMPONENTS=[{x:.7,y:.3,speed:.48,base:.16,gain:.3},{x:1.35,y:-.4,speed:.8,base:.12,gain:.25},{x:2.1,y:.8,speed:-.62,base:.08,gain:.18},{x:3.1,y:-1.2,speed:1.05,base:.04,gain:.12}];
+export function sampleWave(x,y,time,bands,sensitivity=1.2){const gain=Math.max(0,Math.min(2,sensitivity));const edge=Math.max(0,1-(x/5)**2)*Math.max(0,1-(y/2)**2);let z=0;for(let i=0;i<4;i++){const c=WAVE_COMPONENTS[i],energy=Math.max(0,Math.min(1,bands[i]||0));z+=(c.base+c.gain*energy*gain/2)*Math.sin(x*c.x+y*c.y+time*c.speed+i*.8);}return z*edge;}
+export function sampleNormal(x,y,time,bands,sensitivity=1.2){const e=.002,dx=(sampleWave(x+e,y,time,bands,sensitivity)-sampleWave(x-e,y,time,bands,sensitivity))/(2*e),dy=(sampleWave(x,y+e,time,bands,sensitivity)-sampleWave(x,y-e,time,bands,sensitivity))/(2*e),length=Math.hypot(dx,dy,1);return [-dx/length,-dy/length,1/length];}

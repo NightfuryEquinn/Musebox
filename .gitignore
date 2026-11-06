@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Musebox Studio build and local artifacts
+node_modules/
+dist/
+.sites-runtime/
+*.tsbuildinfo
+qa/
