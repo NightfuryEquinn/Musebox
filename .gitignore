@@ -35,7 +35,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Musebox Studio build and local artifacts
+# Afterglow build and local artifacts
 node_modules/
 dist/
 .sites-runtime/

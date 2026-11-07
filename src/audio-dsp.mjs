@@ -1,3 +1,4 @@
+import { ambientEnvelopes } from './ambient.mjs';
 import { choreograph, choreographyAt } from './choreography.mjs';
 export const BANDS = [[20,60],[60,250],[250,500],[500,2000],[2000,6000],[6000,20000]];
 export function analyzeSamples(input, sampleRate) {
@@ -20,7 +21,7 @@ export function analyzeSamples(input, sampleRate) {
  for(const samples of channels)for(let i=0;i<length;i++) {const w=Math.min(159,Math.floor(i/length*160));waveform[w]=Math.max(waveform[w],Math.abs(samples[i]));}
  const transients=new Float32Array(frames.length/7);let lastEnergy=0;
  for(let f=0;f<transients.length;f++){let sum=0;const center=Math.round(f*sampleRate/fps);for(const channel of channels)for(let j=-512;j<512;j++){const v=channel[center+j]||0;sum+=v*v;}const energy=Math.sqrt(sum/(1024*channels.length));transients[f]=Math.max(0,energy-lastEnergy);lastEnergy=energy;}
- const result={frames,waveform,duration,fps,transients};return {...result,choreography:choreograph(result)};
+ const result={frames,waveform,duration,fps,transients};return {...result,ambientFrames:ambientEnvelopes(frames,fps),choreography:choreograph(result)};
 }
-export function featuresAt(a,time){const p=Math.max(0,Math.min(a.frames.length/7-1,time*a.fps)),lo=Math.floor(p),hi=Math.min(lo+1,a.frames.length/7-1),m=p-lo;const v=i=>(a.frames[lo*7+i]*(1-m)+a.frames[hi*7+i]*m)||0;const bands=/** @type {[number,number,number,number,number,number]} */ ([v(0),v(1),v(2),v(3),v(4),v(5)]);return {choreography:choreographyAt(a,time),bands,bass:Math.max(bands[0],bands[1]),mid:Math.max(bands[2],bands[3]),high:Math.max(bands[4],bands[5]),amplitude:v(6)};}
+export function featuresAt(a,time){const p=Math.max(0,Math.min(a.frames.length/7-1,time*a.fps)),lo=Math.floor(p),hi=Math.min(lo+1,a.frames.length/7-1),m=p-lo;const v=i=>(a.frames[lo*7+i]*(1-m)+a.frames[hi*7+i]*m)||0;const bands=/** @type {[number,number,number,number,number,number]} */ ([v(0),v(1),v(2),v(3),v(4),v(5)]);const ambient=i=>a.ambientFrames ? (a.ambientFrames[lo*7+i]*(1-m)+a.ambientFrames[hi*7+i]*m)||0 : v(i);return {duration:a.duration,ambientBands:/** @type {[number,number,number,number,number,number]} */ ([ambient(0),ambient(1),ambient(2),ambient(3),ambient(4),ambient(5)]),ambientEnergy:ambient(6),choreography:choreographyAt(a,time),bands,bass:Math.max(bands[0],bands[1]),mid:Math.max(bands[2],bands[3]),high:Math.max(bands[4],bands[5]),amplitude:v(6)};}
 export function frameCount(duration,fps=60){return Math.ceil(duration*fps);}

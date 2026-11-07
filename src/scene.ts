@@ -1,122 +1,230 @@
-import { WAVE_COMPONENTS, WAVE_WIDTH, WAVE_HEIGHT, MAX_DISPLACEMENT } from './waves.mjs';
+import { ambientMotion, ambientOverlayOpacity } from './ambient.mjs';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { type Features, type Settings } from './types';
+import { WAVE_COMPONENTS, WAVE_WIDTH, WAVE_HEIGHT } from './waves.mjs';
+import { waveColors, type Features, type Settings } from './types';
+
+const WAVE_HEIGHT_SCALE = 2.4;
+const WAVE_DEPTH_SCALE = 1.6;
+const CAMERA_ELEVATION = THREE.MathUtils.degToRad(12);
+const CAMERA_HALF_HEIGHT = 3.3;
 
 export class VisualScene {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(38, 16 / 9, 0.1, 100);
+  camera = new THREE.OrthographicCamera(-5.4, 5.4, CAMERA_HALF_HEIGHT, -CAMERA_HALF_HEIGHT, .1, 50);
   composer: EffectComposer;
   bloom: UnrealBloomPass;
   smaa = new SMAAPass();
-  sheet!: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  output = new OutputPass();
+  sheet: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  distant: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>[] = [];
+  haze: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   overlay = new THREE.Scene();
-  overlayCamera = new THREE.PerspectiveCamera(38,16/9,.1,100);
-
-  group = new THREE.Group();
-
-  particles: THREE.Points;
-  particleTexture: THREE.CanvasTexture;
-  cover: THREE.Mesh;
-  label: THREE.Mesh;
+  overlayCamera = new THREE.OrthographicCamera(0, 1920, 1080, 0, .1, 10);
+  cover: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  label: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   coverTexture?: THREE.Texture;
   labelTexture?: THREE.CanvasTexture;
   labelKey = '';
-  private currentPreset = '';
-  constructor(canvas: HTMLCanvasElement, width = 1280, height = 720) {
+  private colorKey = '';
+
+  constructor(canvas: HTMLCanvasElement, width = 1920, height = 1080) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(1); this.renderer.setSize(width, height, false);
-    this.renderer.setClearColor('#090a10'); this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.camera.aspect=width/height;this.camera.updateProjectionMatrix();this.frameCamera();
-    this.group.position.set(0,.3,0);this.group.rotation.set(0,0,-.08);this.scene.add(this.group);
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(width, height, false);
+    this.renderer.setClearColor('#090909');
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // A low, fixed elevation exposes the crest-to-trough profile of every row.
+    // Orthographic projection keeps amplitude equally readable at the back and front.
+    this.camera.position.set(0, .25 + 15*Math.sin(CAMERA_ELEVATION), 15*Math.cos(CAMERA_ELEVATION));
+    this.camera.lookAt(0, .25, 0);
+    this.overlayCamera.position.z = 5;
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 0.6, 0.6, 0.18);
-    this.composer.addPass(this.bloom); this.composer.addPass(this.smaa); this.composer.addPass(new OutputPass());
-    const positions = new Float32Array(1800 * 3);
-    let seed = 137;
-    const random = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
-    for (let i = 0; i < positions.length; i += 3) { positions[i] = (random() - .5) * 18; positions[i + 1] = (random() - .5) * 10; positions[i + 2] = (random() - .5) * 10 - 2; }
-    const particleGeometry = new THREE.BufferGeometry(); particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const sprite=document.createElement('canvas');sprite.width=sprite.height=64;const ctx=sprite.getContext('2d')!;
-    const gradient=ctx.createRadialGradient(32,32,0,32,32,32);gradient.addColorStop(0,'rgba(255,255,255,1)');gradient.addColorStop(.3,'rgba(255,255,255,.9)');gradient.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=gradient;ctx.fillRect(0,0,64,64);this.particleTexture=new THREE.CanvasTexture(sprite);
-    this.particles = new THREE.Points(particleGeometry,new THREE.PointsMaterial({color:'#a99bd4',map:this.particleTexture,size:4*height/1080,sizeAttenuation:false,transparent:true,opacity:.65,blending:THREE.AdditiveBlending,depthWrite:false}));
-    this.particles.position.set(0,.3,0);this.particles.scale.setScalar(1.4);this.scene.add(this.particles);
-    this.cover = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false }));
-    this.cover.visible = false; this.overlay.add(this.cover);
-    this.label = new THREE.Mesh(new THREE.PlaneGeometry(2.8, .7), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }));
-    this.overlay.add(this.label);this.overlayCamera.position.set(0,0,8.8);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(width, height), .7, .65, .18);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(this.smaa);
+    this.composer.addPass(this.output);
 
-  }
-  setSize(width: number, height: number) { this.renderer.setSize(width, height, false); this.composer.setSize(width, height); this.camera.aspect = width / height; this.camera.updateProjectionMatrix(); this.frameCamera(); this.overlayCamera.aspect=width/height;this.overlayCamera.updateProjectionMatrix(); }
-  private frameCamera() {
-    // Framing depends only on viewport aspect and the maximum wave envelope, never audio time.
-    const halfFov=THREE.MathUtils.degToRad(this.camera.fov/2);
-    const distance=(Math.hypot(WAVE_WIDTH/2,WAVE_HEIGHT/2,MAX_DISPLACEMENT)+.25)/Math.sin(Math.min(halfFov,Math.atan(Math.tan(halfFov)*this.camera.aspect)))*1.08;
-    this.camera.position.set(0,.3,distance);
-    this.camera.lookAt(0,.3,0);
-  }
-  setCover(image: HTMLImageElement | null) {
-    this.coverTexture?.dispose(); this.cover.visible = !!image;
-    if (!image) return;
-    this.coverTexture = new THREE.Texture(image); this.coverTexture.colorSpace = THREE.SRGBColorSpace; this.coverTexture.needsUpdate = true;
-    const material = this.cover.material as THREE.MeshBasicMaterial; material.map = this.coverTexture; material.needsUpdate = true;
-    this.cover.userData.aspect = image.naturalWidth / image.naturalHeight;
-  }
-  private build(preset: string) {
-    if(this.sheet){this.group.remove(this.sheet);this.sheet.geometry.dispose();this.sheet.material.dispose();}
-    const terms=WAVE_COMPONENTS.map((c,i)=>`z+=(${c.base.toFixed(3)}+${c.gain.toFixed(3)}*clamp(uBands[${i}],0.,1.)*clamp(uSensitivity,0.,2.)/2.)*sin(p.x*${c.x.toFixed(3)}+p.y*${c.y.toFixed(3)}+uTime*${c.speed.toFixed(3)}+${(i*.8).toFixed(3)});`).join('');
-    const material=new THREE.ShaderMaterial({transparent:true,side:THREE.DoubleSide,depthWrite:false,uniforms:{uTime:{value:0},uBands:{value:[0,0,0,0,0,0]},uSensitivity:{value:1.2},uMood:{value:1}},
-      vertexShader:`uniform float uTime;uniform float uBands[6];uniform float uSensitivity;uniform float uMood;varying vec3 vNormal;varying vec3 vEye;varying vec2 vUv;varying float vHeight;
-      float heightAt(vec2 p){float z=0.;${terms}return z*uMood*max(0.,1.-pow(p.x/5.,2.))*max(0.,1.-pow(p.y/2.,2.));}
-      void main(){vec3 p=position;p.z=heightAt(p.xy);float e=.002;float dx=(heightAt(p.xy+vec2(e,0.))-heightAt(p.xy-vec2(e,0.)))/(2.*e);float dy=(heightAt(p.xy+vec2(0.,e))-heightAt(p.xy-vec2(0.,e)))/(2.*e);vNormal=normalize(normalMatrix*vec3(-dx,-dy,1.));vec4 view=modelViewMatrix*vec4(p,1.);vEye=normalize(-view.xyz);vUv=uv;vHeight=p.z;gl_Position=projectionMatrix*view;}`,
-      fragmentShader:`uniform float uTime;uniform float uBands[6];varying vec3 vNormal;varying vec3 vEye;varying vec2 vUv;varying float vHeight;
-      void main(){vec3 n=normalize(vNormal);float facing=abs(dot(n,normalize(vEye)));float rim=pow(1.-facing,2.);float light=pow(max(0.,dot(n,normalize(vec3(-.4,.6,1.)))),8.);float folds=.5+.5*sin(vUv.x*22.+vHeight*3.-uTime*.3);float filaments=pow(.5+.5*sin(vUv.x*65.+vUv.y*9.+vHeight*4.+uTime*.6),8.);vec3 mint=vec3(.35,1.,.74),cyan=vec3(.13,.65,.95),violet=vec3(.62,.27,1.);vec3 color=mix(mint,cyan,smoothstep(0.,.6,vUv.x));color=mix(color,violet,smoothstep(.4,1.,vUv.x));float shimmer=uBands[5]*(.5+.5*sin(uTime*3.+vUv.x*18.))*.18;float edge=smoothstep(0.,.09,vUv.x)*smoothstep(0.,.09,1.-vUv.x)*smoothstep(0.,.16,vUv.y)*smoothstep(0.,.16,1.-vUv.y);vec3 c=color*(.22+folds*.3+rim*.8+light*.65+filaments*(.12+uBands[4]*.4)+shimmer);gl_FragColor=vec4(c,edge*(.48+light*.18+rim*.18));}`});
-    this.sheet=new THREE.Mesh(new THREE.PlaneGeometry(WAVE_WIDTH,WAVE_HEIGHT,256,96),material);this.sheet.frustumCulled=false;this.group.add(this.sheet);this.currentPreset=preset;
-  }
-  render(time: number, settings: Settings, features: Features, demo = false) {
-    if (settings.preset !== this.currentPreset) this.build(settings.preset);
-    const t = time * settings.motion;
-    const choreography=features.choreography || {formation:Math.floor(time/8)%4,previous:(Math.floor(time/8)+3)%4,mix:Math.min(1,(time%8)/2),energy:.3,events:[]};
-
-    const bands=features.bands ?? [0,1,2,3,4,5].map(i=>demo ? .2+.15*Math.sin(time*(.4+i*.07)+i) : 0);
-    const moods=[.65,.85,1.,.7],blendMood=Math.max(0,Math.min(1,choreography.mix)),easedMood=blendMood*blendMood*(3-2*blendMood);
-    this.sheet.material.uniforms.uMood.value=moods[choreography.previous]+(moods[choreography.formation]-moods[choreography.previous])*easedMood;
-    this.sheet.material.uniforms.uBands.value=bands;
-    this.sheet.material.uniforms.uTime.value=t;
-    this.sheet.material.uniforms.uSensitivity.value=settings.sensitivity;
-    this.bloom.strength=settings.glow*.9;
-    this.particles.geometry.setDrawRange(0, Math.floor(1800 * settings.particles));
-    (this.particles.material as THREE.PointsMaterial).opacity = .12 + features.high * .5;
-    (this.particles.material as THREE.PointsMaterial).size=4*this.renderer.domElement.height/1080;
-
-    this.particles.rotation.y = t * .012;
-    const size = .65 + settings.coverSize * .8, aspect = this.cover.userData.aspect || 1;
-    this.cover.scale.set(size * Math.min(1, aspect), size * Math.min(1, 1 / aspect), 1);
-    this.cover.position.set(-3.1, -1.35, .3);
-    this.cover.rotation.y = .09;
-    const title = settings.title || (demo ? 'A NEW DIMENSION' : '');
-    const artist = settings.artist || (demo ? 'YOUR SOUND. REIMAGINED.' : '');
-    const key = `${title}|${artist}`;
-    if (key !== this.labelKey) {
-      this.labelKey = key; this.labelTexture?.dispose();
-      const canvas = document.createElement('canvas'); canvas.width = 1120; canvas.height = 280;
-      const ctx = canvas.getContext('2d')!; ctx.fillStyle = '#f1edf9'; ctx.font = '500 48px Arial'; ctx.fillText(title.slice(0, 70), 0, 90, 1080);
-      ctx.fillStyle = '#a5a0b4'; ctx.font = '28px Arial'; ctx.fillText(artist.slice(0, 70), 0, 155, 1080);
-      this.labelTexture = new THREE.CanvasTexture(canvas); this.labelTexture.colorSpace = THREE.SRGBColorSpace;
-      const material = this.label.material as THREE.MeshBasicMaterial; material.map = this.labelTexture; material.needsUpdate = true;
+    // Height and analytic derivatives share one evaluation of each wave component.
+    const terms = WAVE_COMPONENTS.map((c, i) => `{
+      float a=${c.base.toFixed(3)}+${c.gain.toFixed(3)}*clamp(uBands[${i}],0.,1.)*uSensitivity*.5;
+      float phase=p.x*${c.x.toFixed(3)}+p.y*${c.y.toFixed(3)}+uTime*${c.speed.toFixed(3)}+${(i*.8).toFixed(3)};
+      z+=a*sin(phase); dx+=a*cos(phase)*${c.x.toFixed(3)}; dy+=a*cos(phase)*${c.y.toFixed(3)};
+    }`).join('\n');
+    const material = new THREE.ShaderMaterial({
+      transparent: true, side: THREE.DoubleSide, depthWrite: false,
+      uniforms: {
+        uOpacity: { value: 1 }, uTime: { value: 0 }, uBands: { value: [0,0,0,0,0,0] }, uSensitivity: { value: 1.2 }, uMood: { value: 1 },
+        uLow: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHigh: { value: new THREE.Color() },
+      },
+      vertexShader: `
+        uniform float uTime, uSensitivity, uMood; uniform float uBands[6];
+        varying vec2 vUv; varying vec3 vNormal;
+        void main(){
+          vec3 p=position; float z=0.,dx=0.,dy=0.; ${terms}
+          float ex=max(0.,1.-p.x*p.x/25.),ey=max(0.,1.-p.y*p.y/4.);
+          float slopeX=(dx*ex*ey-z*2.*p.x/25.*ey)*uMood;
+          float slopeY=(dy*ex*ey-z*ex*p.y/2.)*uMood;
+          vNormal=normalize(normalMatrix*vec3(-slopeX*${WAVE_HEIGHT_SCALE.toFixed(2)},1.,slopeY*${(WAVE_HEIGHT_SCALE/WAVE_DEPTH_SCALE).toFixed(2)}));
+          float height=z*ex*ey*uMood; vUv=uv;
+          // Preserve each row's depth; displacement is genuine vertical amplitude.
+          p.z=-p.y*${WAVE_DEPTH_SCALE.toFixed(2)};
+          p.y=height*${WAVE_HEIGHT_SCALE.toFixed(2)}+.25;
+          gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+        }`,
+      fragmentShader: `
+        uniform float uTime, uOpacity; uniform float uBands[6]; uniform vec3 uLow,uMid,uHigh;
+        varying vec2 vUv; varying vec3 vNormal;
+        void main(){
+          float rows=vUv.y*56.;
+          float distanceToLine=abs(fract(rows+.5)-.5);
+          float aa=max(fwidth(rows),.0001);
+          float line=1.-smoothstep(.045,.045+aa*.85,distanceToLine);
+          vec3 color=mix(uLow,uMid,smoothstep(.08,.52,vUv.y));
+          color=mix(color,uHigh,smoothstep(.70,1.,vUv.y));
+          float edge=smoothstep(0.,.04,vUv.x)*smoothstep(0.,.04,1.-vUv.x)*smoothstep(0.,.05,vUv.y)*smoothstep(0.,.05,1.-vUv.y);
+          float light=.65+.35*abs(vNormal.z);
+          float detail=.3*uBands[4]+.18*uBands[5]*(.5+.5*sin(uTime*3.+vUv.x*18.));
+          vec3 radiance=color*(line*(1.6+detail)*light+.018);
+          gl_FragColor=vec4(radiance,edge*(.16+line*.84)*uOpacity);
+        }`,
+    });
+    this.sheet = new THREE.Mesh(new THREE.PlaneGeometry(WAVE_WIDTH, WAVE_HEIGHT, 256, 96), material);
+    this.sheet.frustumCulled = false;
+    this.scene.add(this.sheet);
+    this.sheet.renderOrder = 3;
+    for (let i=0; i<2; i++) {
+      const layer = new THREE.Mesh(new THREE.PlaneGeometry(WAVE_WIDTH,WAVE_HEIGHT,128,48), material.clone());
+      layer.position.set(0,.4+i*.3,-1.8-i*1.4);
+      layer.scale.set(.95-i*.07,.65-i*.1,1);
+      layer.renderOrder=2-i;
+      layer.frustumCulled=false;
+      layer.visible=false;
+      this.distant.push(layer); this.scene.add(layer);
     }
-    this.label.position.set(-2.4, this.cover.visible ? -2.32 : -1.85, .32);
-    this.composer.render();
-    this.renderer.autoClear=false;this.renderer.clearDepth();this.renderer.render(this.overlay,this.overlayCamera);this.renderer.autoClear=true;
+    this.haze = new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.ShaderMaterial({
+      transparent:true,depthWrite:false,depthTest:false,
+      uniforms:{uTime:{value:0},uAmount:{value:0},uEnergy:{value:0},uLow:{value:new THREE.Color()},uMid:{value:new THREE.Color()},uHigh:{value:new THREE.Color()}},
+      vertexShader:`varying vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.99,1.);}`,
+      fragmentShader:`
+        varying vec2 vUv; uniform float uTime,uAmount,uEnergy; uniform vec3 uLow,uMid,uHigh;
+        void main(){
+          vec2 p=vUv; float curve=.52+.065*sin(p.x*5.+uTime*.13)+.035*sin(p.x*9.-uTime*.21);
+          float ribbon=exp(-pow((p.y-curve)/.15,2.));
+          float halo=exp(-dot((p-vec2(.5,.52))*vec2(1.6,2.1),(p-vec2(.5,.52))*vec2(1.6,2.1))*4.);
+          float edge=smoothstep(0.,.22,p.x)*smoothstep(0.,.22,1.-p.x)*smoothstep(0.,.2,p.y)*smoothstep(0.,.2,1.-p.y);
+          vec3 color=mix(uLow,uMid,smoothstep(.1,.7,p.x));
+          color=mix(color,uHigh,.18+.08*sin(uTime*.17));
+          gl_FragColor=vec4(color*.55,edge*(ribbon*.19+halo*.12)*uAmount*(.7+.3*uEnergy));
+        }`
+    }));
+    this.haze.frustumCulled=false; this.haze.renderOrder=0; this.haze.visible=false;
+    this.scene.add(this.haze);
+    this.cover = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false }));
+    this.cover.visible = false;
+    this.overlay.add(this.cover);
+    this.label = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false, depthWrite: false }));
+    this.overlay.add(this.label);
+    this.setSize(width, height);
   }
+
+  setSize(width: number, height: number) {
+    this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height);
+    // Keep the full displacement envelope visible; resize never follows audio energy.
+    const halfHeight = Math.max(CAMERA_HALF_HEIGHT, (WAVE_WIDTH/2+.4)*height/width);
+    this.camera.left = -halfHeight*width/height;
+    this.camera.right = halfHeight*width/height;
+    this.camera.top = halfHeight;
+    this.camera.bottom = -halfHeight;
+    this.camera.updateProjectionMatrix();
+  }
+
+  setCover(image: HTMLImageElement | null) {
+    this.coverTexture?.dispose();
+    this.cover.visible = !!image;
+    this.cover.material.map = null;
+    if (image) {
+      this.coverTexture = new THREE.Texture(image);
+      this.coverTexture.colorSpace = THREE.SRGBColorSpace;
+      this.coverTexture.needsUpdate = true;
+      this.cover.material.map = this.coverTexture;
+      this.cover.userData.aspect = image.naturalWidth/image.naturalHeight;
+    }
+    this.cover.material.needsUpdate = true;
+  }
+
+  render(time: number, settings: Settings, features: Features) {
+    const u = this.sheet.material.uniforms;
+    const choreography = features.choreography;
+    const moods = [.65,.85,1,.7];
+    const blend = Math.max(0,Math.min(1,choreography?.mix ?? 1));
+    const eased = blend*blend*(3-2*blend);
+    u.uMood.value = choreography ? moods[choreography.previous]+(moods[choreography.formation]-moods[choreography.previous])*eased : 1;
+    // Main filaments retain the original amplitude, bands and flow speed.
+    // Only the atmosphere uses slow motion and smoothed audio envelopes.
+    const motion = ambientMotion(time, settings.motion, features.ambientEnergy ?? 0);
+    u.uTime.value = time*settings.motion;
+    u.uSensitivity.value = settings.sensitivity;
+    u.uBands.value = features.bands ?? [0,0,0,0,0,0];
+    const colors = waveColors(settings);
+    const colorKey = colors.join('|');
+    if (colorKey !== this.colorKey) {
+      this.colorKey = colorKey;
+      u.uLow.value.set(colors[0]); u.uMid.value.set(colors[1]); u.uHigh.value.set(colors[2]);
+    }
+    const atmosphere = Math.max(0,Math.min(1,settings.atmosphere));
+    this.haze.visible = atmosphere>0;
+    const h=this.haze.material.uniforms;
+    h.uTime.value=motion.phase; h.uAmount.value=atmosphere; h.uEnergy.value=features.ambientEnergy ?? 0;
+    for (const name of ['uLow','uMid','uHigh']) h[name].value.copy(u[name].value);
+    this.distant.forEach((layer,i)=>{
+      layer.visible=atmosphere>0;
+      const d=layer.material.uniforms;
+      d.uTime.value=motion.phase*(i===0 ? .71 : .43)+9+i*14;
+      d.uMood.value=motion.mood; d.uBands.value=features.ambientBands ?? [0,0,0,0,0,0];
+      d.uSensitivity.value=settings.sensitivity;
+      d.uOpacity.value=atmosphere*(i===0 ? .22 : .12);
+      for (const name of ['uLow','uMid','uHigh']) d[name].value.copy(u[name].value);
+    });
+    const opacity=ambientOverlayOpacity(time,features.duration ?? 0);
+    this.cover.material.opacity=opacity; this.label.material.opacity=opacity;
+    this.bloom.strength = settings.glow*1.2;
+    const size = 110+settings.coverSize*110, aspect = this.cover.userData.aspect || 1;
+    const width = size*Math.min(1,aspect), height = size*Math.min(1,1/aspect);
+    this.cover.scale.set(width,height,1);
+    this.cover.position.set(52+width/2,48+height/2,0);
+    const key = JSON.stringify([settings.title,settings.artist,colors[1],document.fonts.status]);
+    if (key !== this.labelKey) {
+      this.labelKey = key;
+      this.labelTexture?.dispose();
+      const canvas = document.createElement('canvas'); canvas.width=1440; canvas.height=240;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle='#eeeee5'; ctx.font='italic 80px "Cormorant Garamond", Georgia, serif';
+      ctx.fillText(settings.title,0,106,1400);
+      ctx.fillStyle=colors[1]; ctx.font='24px "IBM Plex Mono", monospace';
+      ctx.fillText(settings.artist.toUpperCase(),4,166,1400);
+      this.labelTexture=new THREE.CanvasTexture(canvas); this.labelTexture.colorSpace=THREE.SRGBColorSpace;
+      this.label.material.map=this.labelTexture; this.label.material.needsUpdate=true;
+    }
+    this.label.scale.set(1008,168,1);
+    this.label.position.set((this.cover.visible ? 52+width+30 : 52)+504,112,0);
+    this.composer.render();
+    this.renderer.autoClear=false;
+    this.renderer.clearDepth();
+    this.renderer.render(this.overlay,this.overlayCamera);
+    this.renderer.autoClear=true;
+  }
+
   dispose() {
-    [...this.overlay.children].forEach(o=>this.scene.add(o)); this.scene.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Line || o instanceof THREE.Points) { o.geometry.dispose(); const m = o.material; (Array.isArray(m) ? m : [m]).forEach(x => x.dispose()); } });
-    this.particleTexture.dispose(); this.coverTexture?.dispose(); this.labelTexture?.dispose(); this.smaa.dispose(); this.bloom.dispose(); this.composer.dispose(); this.renderer.dispose();
+    for (const mesh of [this.sheet,this.cover,this.label,this.haze,...this.distant]) { mesh.geometry.dispose(); mesh.material.dispose(); }
+    this.coverTexture?.dispose(); this.labelTexture?.dispose();
+    this.smaa.dispose(); this.bloom.dispose(); this.output.dispose(); this.composer.dispose(); this.renderer.dispose();
   }
 }

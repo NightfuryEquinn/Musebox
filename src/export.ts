@@ -30,7 +30,7 @@ export async function exportVideo({ scene, track, settings, format, handle, file
       const expectedBytes = buffer.duration * (20_000_000 + 320_000) / 8 * 1.2;
       if (estimate.quota && expectedBytes > estimate.quota - (estimate.usage || 0)) throw new Error('Not enough browser storage for this video. Use desktop Chrome or Edge to save directly to disk.');
       temporaryDirectory = await navigator.storage.getDirectory();
-      temporaryName = `musebox-${crypto.randomUUID()}.${format}`;
+      temporaryName = `afterglow-${crypto.randomUUID()}.${format}`;
       handle = await temporaryDirectory.getFileHandle(temporaryName, { create: true });
     }
     writable = await handle.createWritable();
@@ -63,12 +63,12 @@ export async function exportVideo({ scene, track, settings, format, handle, file
       }
       if (frame % 12 === 0) {
         const fraction = (frame + 1) / total;
-        onProgress({ stage: 'Rendering video', fraction: fraction * .98, remaining: frame > 120 ? (performance.now() - started) / 1000 / fraction * (1 - fraction) : undefined });
+        onProgress({ phase: 'render', stage: 'Rendering video', frames: frame + 1, totalFrames: total, elapsed: (performance.now() - started) / 1000, fraction: fraction * .98, remaining: frame > 120 ? (performance.now() - started) / 1000 / fraction * (1 - fraction) : undefined });
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
     signal.throwIfAborted();
-    video.close(); audio.close(); onProgress({ stage: 'Finalizing file', fraction: .99 });
+    video.close(); audio.close(); onProgress({ phase: 'finalize', stage: 'Finalizing file', frames: total, totalFrames: total, elapsed: (performance.now() - started) / 1000, fraction: .99 });
     await output.finalize(); finalized = true;
     signal.throwIfAborted();
     if (temporaryDirectory) {
@@ -79,7 +79,7 @@ export async function exportVideo({ scene, track, settings, format, handle, file
       setTimeout(() => { URL.revokeObjectURL(url); directory.removeEntry(name).catch(() => {}); }, 60_000);
       temporaryName = undefined;
     }
-    onProgress({ stage: 'Complete', fraction: 1 });
+    onProgress({ phase: 'complete', stage: 'Complete', frames: total, totalFrames: total, elapsed: (performance.now() - started) / 1000, fraction: 1 });
   } catch (error) {
     failed = true;
     if (output && !finalized) await output.cancel().catch(() => {});
